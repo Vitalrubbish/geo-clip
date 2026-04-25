@@ -24,5 +24,11 @@ class ImageEncoder(nn.Module):
 
     def forward(self, x):
         x = self.CLIP.get_image_features(pixel_values=x)
+        # HuggingFace CLIP returns a tuple or dict, we need the tensor
+        if hasattr(x, 'pooler_output'):
+            x = x.pooler_output
+        elif isinstance(x, tuple):
+            x = x[0]
         x = self.mlp(x)
+        return x
         return x
