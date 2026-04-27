@@ -1,5 +1,5 @@
 ## Notice
-This project is running on virtual environment conda. Before you run any commands, please first run   the following bash first. 
+This project is running on virtual environment miniconda. The virtual environment geoclip has alreay created locally Before you run any commands, please first run the following bash first. 
 ```bash
 conda activate geoclip
 ```

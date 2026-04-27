@@ -9,3 +9,5 @@ __pycache__
 *.egg-info
 .csv
 .json
+scripts/convert_streetview_pano_dataset.py
+.vscode

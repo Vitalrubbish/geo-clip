@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
-from transformers import CLIPModel, AutoProcessor
+from PIL import Image
+from torchvision import transforms
+from transformers import CLIPImageProcessor, CLIPModel
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='huggingface_hub.*')
@@ -9,7 +11,7 @@ class ImageEncoder(nn.Module):
     def __init__(self):
         super(ImageEncoder, self).__init__()
         self.CLIP = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-        self.image_processor = AutoProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        self.image_processor = self._load_image_processor()
         self.mlp = nn.Sequential(nn.Linear(768, 768),
                                  nn.ReLU(),
                                  nn.Linear(768, 512))
@@ -18,8 +20,32 @@ class ImageEncoder(nn.Module):
         for param in self.CLIP.parameters():
             param.requires_grad = False
 
+    def _load_image_processor(self):
+        try:
+            return CLIPImageProcessor.from_pretrained(
+                "openai/clip-vit-large-patch14",
+                local_files_only=True,
+            )
+        except Exception:
+            return transforms.Compose(
+                [
+                    transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=(0.48145466, 0.4578275, 0.40821073),
+                        std=(0.26862954, 0.26130258, 0.27577711),
+                    ),
+                ]
+            )
+
     def preprocess_image(self, image):
-        x = self.image_processor(images=image, return_tensors="pt")["pixel_values"]
+        if isinstance(self.image_processor, CLIPImageProcessor):
+            x = self.image_processor(images=image, return_tensors="pt")["pixel_values"]
+        else:
+            if not isinstance(image, Image.Image):
+                image = Image.fromarray(image)
+            x = self.image_processor(image).unsqueeze(0)
         return x
 
     def forward(self, x):
