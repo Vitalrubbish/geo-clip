@@ -41,26 +41,58 @@ class LocationEncoderCapsule(nn.Module):
         x = self.head(x)
         return x
 
+
+class SigmaSelector(nn.Module):
+    def __init__(self, input_dim=2, num_sigmas=3, hidden_dim=64):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_sigmas),
+            nn.Softmax(dim=-1),
+        )
+
+        # Start from uniform branch weights before training.
+        nn.init.zeros_(self.attention[2].weight)
+        nn.init.zeros_(self.attention[2].bias)
+
+    def forward(self, location):
+        return self.attention(location)
+
 class LocationEncoder(nn.Module):
-    def __init__(self, sigma=[2**0, 2**4, 2**8], from_pretrained=True):
+    def __init__(self, sigma=[2**0, 2**4, 2**8], from_pretrained=True, use_sigma_selector=False):
         super(LocationEncoder, self).__init__()
         self.sigma = sigma
         self.n = len(self.sigma)
+        self.use_sigma_selector = use_sigma_selector
 
         for i, s in enumerate(self.sigma):
             self.add_module('LocEnc' + str(i), LocationEncoderCapsule(sigma=s))
+
+        if self.use_sigma_selector:
+            self.sigma_selector = SigmaSelector(input_dim=2, num_sigmas=self.n)
 
         if from_pretrained:
             self._load_weights()
 
     def _load_weights(self):
-        self.load_state_dict(torch.load(f"{file_dir}/weights/location_encoder_weights.pth"))
+        state_dict = torch.load(f"{file_dir}/weights/location_encoder_weights.pth")
+        self.load_state_dict(state_dict, strict=not self.use_sigma_selector)
 
     def forward(self, location):
         location = equal_earth_projection(location)
-        location_features = torch.zeros(location.shape[0], 512).to(location.device)
 
+        branch_features = []
         for i in range(self.n):
-            location_features += self._modules['LocEnc' + str(i)](location)
+            branch_features.append(self._modules['LocEnc' + str(i)](location))
+
+        if self.use_sigma_selector:
+            weights = self.sigma_selector(location).unsqueeze(-1)  # (B, n, 1)
+            stacked = torch.stack(branch_features, dim=1)  # (B, n, 512)
+            location_features = (weights * stacked).sum(dim=1)
+        else:
+            location_features = torch.zeros(location.shape[0], 512).to(location.device)
+            for feature in branch_features:
+                location_features += feature
         
         return location_features
