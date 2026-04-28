@@ -87,7 +87,7 @@ class LocationEncoder(nn.Module):
             branch_features.append(self._modules['LocEnc' + str(i)](location))
 
         if self.use_sigma_selector:
-            weights = self.sigma_selector(location).unsqueeze(-1)  # (B, n, 1)
+            weights = self.n * self.sigma_selector(location).unsqueeze(-1)  # (B, n, 1)
             stacked = torch.stack(branch_features, dim=1)  # (B, n, 512)
             location_features = (weights * stacked).sum(dim=1)
         else:

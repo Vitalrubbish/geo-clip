@@ -28,10 +28,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
-    parser.add_argument("--queue-size", type=int, default=4096)
+    parser.add_argument("--queue-size", type=int, default=2048)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/sigma_selector"))
+    parser.add_argument(
+        "--unfreeze-capsule-head",
+        action="store_true",
+        help="Also unfreeze each LocationEncoderCapsule head (final linear layer)",
+    )
     return parser.parse_args()
 
 
@@ -67,15 +72,27 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def freeze_except_selector(model: GeoCLIP) -> None:
+def freeze_for_sigma_training(model: GeoCLIP, unfreeze_capsule_head: bool = False) -> list[torch.nn.Parameter]:
     for param in model.parameters():
         param.requires_grad = False
 
     if not hasattr(model.location_encoder, "sigma_selector"):
         raise RuntimeError("SigmaSelector is not available. Ensure use_sigma_selector=True")
 
+    trainable_params: list[torch.nn.Parameter] = []
+
     for param in model.location_encoder.sigma_selector.parameters():
         param.requires_grad = True
+        trainable_params.append(param)
+
+    if unfreeze_capsule_head:
+        for i in range(model.location_encoder.n):
+            capsule = model.location_encoder._modules[f"LocEnc{i}"]
+            for param in capsule.head.parameters():
+                param.requires_grad = True
+                trainable_params.append(param)
+
+    return trainable_params
 
 
 def train_one_epoch(
@@ -223,10 +240,13 @@ def main() -> int:
     model = GeoCLIP(from_pretrained=True, queue_size=args.queue_size, use_sigma_selector=True).to(device)
     model.gps_gallery = model.gps_gallery.to(device)
 
-    freeze_except_selector(model)
+    trainable_params = freeze_for_sigma_training(
+        model,
+        unfreeze_capsule_head=args.unfreeze_capsule_head,
+    )
 
     optimizer = torch.optim.AdamW(
-        model.location_encoder.sigma_selector.parameters(),
+        trainable_params,
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
@@ -244,6 +264,9 @@ def main() -> int:
     print(f"Train CSV: {train_csv} ({len(train_dataset)} samples)")
     print(f"Val CSV: {val_csv} ({len(val_dataset)} samples)")
     print(f"Run dir: {run_dir}")
+    print(f"Unfreeze capsule head: {args.unfreeze_capsule_head}")
+    trainable_param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Trainable parameters: {trainable_param_count}")
 
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
@@ -261,6 +284,7 @@ def main() -> int:
                 "train_loss": float(train_loss),
                 "val_loss": float(val_loss),
                 "selector_state_dict": model.location_encoder.sigma_selector.state_dict(),
+                "location_encoder_state_dict": model.location_encoder.state_dict(),
             },
             latest_ckpt,
         )
@@ -274,6 +298,7 @@ def main() -> int:
                     "train_loss": float(train_loss),
                     "val_loss": float(val_loss),
                     "selector_state_dict": model.location_encoder.sigma_selector.state_dict(),
+                    "location_encoder_state_dict": model.location_encoder.state_dict(),
                 },
                 best_ckpt,
             )
@@ -294,6 +319,8 @@ def main() -> int:
         "lr": args.lr,
         "weight_decay": args.weight_decay,
         "queue_size": args.queue_size,
+        "unfreeze_capsule_head": args.unfreeze_capsule_head,
+        "trainable_param_count": trainable_param_count,
         "train_losses": train_losses,
         "val_losses": val_losses,
         "best_val_loss": float(best_val_loss),

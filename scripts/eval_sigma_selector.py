@@ -79,6 +79,10 @@ def load_selector_checkpoint_if_needed(model: GeoCLIP, checkpoint_path: Path | N
         raise FileNotFoundError(f"Selector checkpoint not found: {checkpoint_path}")
 
     payload = torch.load(checkpoint_path, map_location="cpu")
+    if isinstance(payload, dict) and "location_encoder_state_dict" in payload:
+        model.location_encoder.load_state_dict(payload["location_encoder_state_dict"], strict=True)
+        return
+
     if isinstance(payload, dict) and "selector_state_dict" in payload:
         state = payload["selector_state_dict"]
     else:
@@ -117,6 +121,8 @@ def main() -> int:
     model.gps_gallery = model.gps_gallery.to(device)
 
     if args.use_sigma_selector:
+        if args.selector_checkpoint is None:
+            raise ValueError("--selector-checkpoint is required when --use-sigma-selector is true")
         load_selector_checkpoint_if_needed(model, args.selector_checkpoint)
 
     metrics = eval_images(dataloader, model, device=device)
