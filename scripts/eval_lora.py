@@ -70,6 +70,33 @@ def default_output_json(dataset: str, checkpoint: Path) -> Path:
     return Path(f"data/{dataset}/lora_{stem}_eval.json")
 
 
+def infer_queue_size_from_checkpoint(checkpoint_data: dict) -> int:
+    state_dict = checkpoint_data.get("model_state_dict", {})
+    gps_queue = state_dict.get("gps_queue")
+    if isinstance(gps_queue, torch.Tensor) and gps_queue.ndim == 2:
+        # GeoCLIP stores queue as shape (2, queue_size)
+        return int(gps_queue.shape[1])
+    return 4096
+
+
+def filter_incompatible_state_dict(model: GeoCLIP, state_dict: dict) -> tuple[dict, list[str]]:
+    model_state = model.state_dict()
+    filtered_state: dict[str, torch.Tensor] = {}
+    skipped: list[str] = []
+
+    for key, value in state_dict.items():
+        if key not in model_state:
+            continue
+        if model_state[key].shape != value.shape:
+            skipped.append(
+                f"{key}: ckpt={tuple(value.shape)} model={tuple(model_state[key].shape)}"
+            )
+            continue
+        filtered_state[key] = value
+
+    return filtered_state, skipped
+
+
 def main() -> int:
     args = parse_args()
     device = resolve_device(args.device)
@@ -102,8 +129,11 @@ def main() -> int:
         collate_fn=collate_image_gps,
     )
 
+    queue_size = infer_queue_size_from_checkpoint(checkpoint_data)
+
     model = GeoCLIP(
         from_pretrained=True,
+        queue_size=queue_size,
         use_sigma_selector=True,
         use_lora=True,
         lora_r=lora_config.get("r", 8),
@@ -112,7 +142,16 @@ def main() -> int:
     ).to(device)
     model.gps_gallery = model.gps_gallery.to(device)
 
-    model.load_state_dict(checkpoint_data["model_state_dict"], strict=False)
+    filtered_state, skipped_keys = filter_incompatible_state_dict(
+        model,
+        checkpoint_data["model_state_dict"],
+    )
+    model.load_state_dict(filtered_state, strict=False)
+
+    if skipped_keys:
+        print("Warning: skipped incompatible checkpoint tensors:")
+        for item in skipped_keys:
+            print(f"  - {item}")
 
     metrics = eval_images(dataloader, model, device=device)
 
@@ -127,6 +166,7 @@ def main() -> int:
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
         "device": device,
+        "queue_size": queue_size,
         "checkpoint": str(args.checkpoint),
         "lora_config": lora_config,
         "metrics": metrics,
