@@ -3,22 +3,35 @@ import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
 from transformers import CLIPImageProcessor, CLIPModel
+from peft import LoraConfig, get_peft_model
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='huggingface_hub.*')
 
 class ImageEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, use_lora = False):
         super(ImageEncoder, self).__init__()
         self.CLIP = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.image_processor = self._load_image_processor()
         self.mlp = nn.Sequential(nn.Linear(768, 768),
                                  nn.ReLU(),
                                  nn.Linear(768, 512))
-
-        # Freeze CLIP
-        for param in self.CLIP.parameters():
-            param.requires_grad = False
+        
+        if use_lora:
+            target_modules = ["v_proj", "q_proj"]
+            lora_config = LoraConfig(
+                r = 4,
+                lora_alpha = 16,
+                target_modules = target_modules,
+                lora_dropout = 0.05,
+                bias = "none",
+            )
+            self.CLIP.vision_model = get_peft_model(self.CLIP.vision_model, lora_config)
+            print(f"LoRA applied to CLIP vision model with target modules: {target_modules}")
+        else:
+            # Freeze CLIP
+            for param in self.CLIP.parameters():
+                param.requires_grad = False
 
     def _load_image_processor(self):
         try:
@@ -56,5 +69,4 @@ class ImageEncoder(nn.Module):
         elif isinstance(x, tuple):
             x = x[0]
         x = self.mlp(x)
-        return x
         return x
