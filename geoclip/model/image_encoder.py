@@ -9,27 +9,34 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='huggingface_hub.*')
 
 class ImageEncoder(nn.Module):
-    def __init__(self, use_lora = False):
+    def __init__(self, use_lora=False, lora_r=8, lora_alpha=16, lora_dropout=0.05):
         super(ImageEncoder, self).__init__()
         self.CLIP = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.image_processor = self._load_image_processor()
         self.mlp = nn.Sequential(nn.Linear(768, 768),
                                  nn.ReLU(),
                                  nn.Linear(768, 512))
-        
+        self.use_lora = use_lora
+
         if use_lora:
             target_modules = ["v_proj", "q_proj"]
+            lora_layers = list(range(18, 24))  # Last 6 layers of ViT-L/14
             lora_config = LoraConfig(
-                r = 4,
-                lora_alpha = 16,
-                target_modules = target_modules,
-                lora_dropout = 0.05,
-                bias = "none",
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                target_modules=target_modules,
+                lora_dropout=lora_dropout,
+                bias="none",
+                layers_to_transform=lora_layers,
             )
             self.CLIP.vision_model = get_peft_model(self.CLIP.vision_model, lora_config)
-            print(f"LoRA applied to CLIP vision model with target modules: {target_modules}")
+            # Freeze unused text model
+            for param in self.CLIP.text_model.parameters():
+                param.requires_grad = False
+            print(f"LoRA applied to CLIP ViT layers {lora_layers[0]}-{lora_layers[-1]} "
+                  f"(r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}, "
+                  f"targets={target_modules})")
         else:
-            # Freeze CLIP
             for param in self.CLIP.parameters():
                 param.requires_grad = False
 

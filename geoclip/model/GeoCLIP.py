@@ -11,12 +11,15 @@ from PIL import Image
 from torchvision.transforms import ToPILImage
 
 class GeoCLIP(nn.Module):
-    def __init__(self, from_pretrained=True, queue_size=4096, use_sigma_selector=False):
+    def __init__(self, from_pretrained=True, queue_size=4096, use_sigma_selector=False,
+                 use_lora=False, lora_r=8, lora_alpha=16, lora_dropout=0.05):
         super().__init__()
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-        self.image_encoder = ImageEncoder()
+        self.image_encoder = ImageEncoder(use_lora=use_lora, lora_r=lora_r,
+                                          lora_alpha=lora_alpha, lora_dropout=lora_dropout)
         self.location_encoder = LocationEncoder(use_sigma_selector=use_sigma_selector)
         self.use_sigma_selector = use_sigma_selector
+        self.use_lora = use_lora
 
         self.gps_gallery = load_gps_data(os.path.join(file_dir, "gps_gallery", "coordinates_100K.csv"))
         self._initialize_gps_queue(queue_size)
@@ -35,7 +38,9 @@ class GeoCLIP(nn.Module):
         return super().to(device)
 
     def _load_weights(self):
-        self.image_encoder.mlp.load_state_dict(torch.load(f"{self.weights_folder}/image_encoder_mlp_weights.pth"))
+        self.image_encoder.mlp.load_state_dict(
+            torch.load(f"{self.weights_folder}/image_encoder_mlp_weights.pth")
+        )
         self.location_encoder.load_state_dict(
             torch.load(f"{self.weights_folder}/location_encoder_weights.pth"),
             strict=not self.use_sigma_selector,
