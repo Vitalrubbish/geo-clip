@@ -53,7 +53,7 @@
     ```bash
     python scripts/train_lora.py \
     --mode feasibility --epochs 10 --batch-size 16 \
-    --lora-r 8 --lora-alpha 16 --lora-lr 1e-4 --location-lr 5e-5
+    --lora-r 4 --lora-alpha 8 --lora-lr 1e-4 --location-lr 5e-5
     ```
 
 **Notice**: You can modify any parameters as you like.
